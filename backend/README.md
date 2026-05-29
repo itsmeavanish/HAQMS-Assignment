@@ -5,6 +5,21 @@ This is the Express API server and database layer for the Hospital Appointment &
 ## 🚀 Running the API
 The backend server runs on port `5000` by default.
 
+## Environment
+
+Create a local `.env` by copying the example and filling secrets:
+
+```bash
+cp .env.example .env
+# edit backend/.env to set local values (do not commit this file)
+```
+
+If `.env` was accidentally committed, untrack it and add it to `.gitignore`:
+
+```bash
+git rm --cached backend/.env
+git commit -m "remove secret .env from repo"
+```
 ### Setup Database Environment
 1. Ensure a local PostgreSQL instance is running or launch the pre-packaged docker container.
 2. Build migrations and run the mock seed:
