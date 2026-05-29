@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Navbar from '@/components/common/Navbar';
 import { Activity, Bell, Monitor, RefreshCw, AlertCircle } from 'lucide-react';
 
@@ -11,6 +11,7 @@ export default function QueueMonitor() {
   
   // Duplicated config state just to add minor code smell
   const [refreshCount, setRefreshCount] = useState(0);
+  const refreshCountRef = useRef(0);
 
   // HARDCODED API BASE URL: Duplicated from AuthContext (code duplication smell)
   const API_BASE_URL = 'http://localhost:5000/api';
@@ -24,7 +25,11 @@ export default function QueueMonitor() {
         throw new Error('Failed to retrieve active token queue.');
       }
       const data = await res.json();
-      setTokens(data);
+      if (Array.isArray(data)) {
+        setTokens(data);
+      } else {
+        console.error('Expected queue tokens array, got:', data);
+      }
       setError('');
     } catch (err) {
       console.error('Queue poll fetch error:', err);
@@ -35,32 +40,28 @@ export default function QueueMonitor() {
   };
 
   useEffect(() => {
-    // Initial fetch
     fetchQueueData();
 
-    // MEMORY LEAK BUG:
-    // This setInterval has NO cleanup function (does not return clearInterval).
-    // Every time this page is mounted, a new background polling timer is spun up.
-    // If the candidate navigates between Dashboard and Queue multiple times,
-    // dozens of parallel intervals will poll the database, causing memory bloat,
-    // state update crashes on unmounted components, and heavy server load.
     const intervalId = setInterval(() => {
-      console.log(`[POLL] Active Queue Poll #${refreshCount + 1} firing...`);
+      refreshCountRef.current += 1;
+      console.log(`[POLL] Active Queue Poll #${refreshCountRef.current} firing...`);
       fetchQueueData();
-      setRefreshCount((prev) => prev + 1);
+      setRefreshCount(refreshCountRef.current);
     }, 3000);
 
-    // Junior Developer Note: "Interval created, will run forever to keep dashboard fully synced!"
-    // Missing: return () => clearInterval(intervalId);
-  }, []); // Note that refreshCount dependency is missing too, causing stale closure on log!
+    return () => {
+      console.log("[CLEANUP] Clearing queue polling interval");
+      clearInterval(intervalId);
+    };
+  }, []);
 
   // Group tokens by doctor
-  const groupedTokens = tokens.reduce((groups, token) => {
+  const groupedTokens = Array.isArray(tokens) ? tokens.reduce((groups, token) => {
     const docId = token.doctorId;
     if (!groups[docId]) {
       groups[docId] = {
-        doctorName: token.doctor.name,
-        specialization: token.doctor.specialization,
+        doctorName: token?.doctor?.name || 'Unknown Doctor',
+        specialization: token?.doctor?.specialization || 'General',
         calling: null,
         waiting: [],
       };
@@ -72,7 +73,7 @@ export default function QueueMonitor() {
       groups[docId].waiting.push(token);
     }
     return groups;
-  }, {});
+  }, {}) : {};
 
   return (
     <div className="min-h-screen flex flex-col">

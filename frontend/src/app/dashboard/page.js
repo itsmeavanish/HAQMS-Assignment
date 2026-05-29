@@ -21,10 +21,15 @@ export default function Dashboard() {
     }
   }, [user]);
 
-  if (!user) return null;
-
   // Global State
-  const [activeTab, setActiveTab] = useState(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+  const [activeTab, setActiveTab] = useState(user?.role === 'ADMIN' ? 'reports' : user?.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+
+  // Synchronize activeTab when user role is populated from localStorage
+  useEffect(() => {
+    if (user?.role) {
+      setActiveTab(user.role === 'ADMIN' ? 'reports' : user.role === 'RECEPTIONIST' ? 'patients' : 'appointments');
+    }
+  }, [user]);
 
   // ==========================================
   // STATE FOR RECEPTIONIST WORKFLOWS
@@ -32,6 +37,7 @@ export default function Dashboard() {
   const [patients, setPatients] = useState([]);
   const [patientsLoading, setPatientsLoading] = useState(false);
   const [patientSearch, setPatientSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [patientGender, setPatientGender] = useState('All');
   const [patientsPagination, setPatientsPagination] = useState({ page: 1, totalPages: 1 });
   
@@ -71,12 +77,22 @@ export default function Dashboard() {
   // RECEPTIONIST FUNCTIONS
   // ==========================================
   
+  // Debounce search query to optimize performance and prevent re-fetching on every keystroke
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearch(patientSearch);
+    }, 300);
+
+    return () => {
+      clearTimeout(handler);
+    };
+  }, [patientSearch]);
+
   // Fetch Patients List
   const fetchPatients = async (page = 1) => {
     setPatientsLoading(true);
     try {
-      // Inefficient memory pagination called from client
-      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${patientSearch}&gender=${patientGender}`, {
+      const res = await fetch(`${API_BASE_URL}/patients?page=${page}&limit=5&search=${debouncedSearch}&gender=${patientGender}`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
@@ -95,29 +111,36 @@ export default function Dashboard() {
     }
   };
 
-  // Trigger Patient List Fetch (Every keystroke trigger re-renders parent! - Performance bug)
+  // Trigger Patient List Fetch (Triggered on debounced query changes)
   useEffect(() => {
-    if (user.role === 'RECEPTIONIST' || user.role === 'ADMIN') {
+    if (token && (user?.role === 'RECEPTIONIST' || user?.role === 'ADMIN')) {
       fetchPatients(1);
     }
-  }, [patientSearch, patientGender]);
+  }, [debouncedSearch, patientGender, token, user]);
 
   // Fetch Doctors for booking drop-down
   const fetchDoctorsDropdown = async () => {
+    if (!token) return;
     try {
       const res = await fetch(`${API_BASE_URL}/doctors`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const data = await res.json();
-      setDoctorsList(data);
+      if (Array.isArray(data)) {
+        setDoctorsList(data);
+      } else {
+        console.error('Failed to fetch doctors dropdown:', data);
+      }
     } catch (e) {
       console.error(e);
     }
   };
 
   useEffect(() => {
-    fetchDoctorsDropdown();
-  }, []);
+    if (token) {
+      fetchDoctorsDropdown();
+    }
+  }, [token]);
 
   // Handle Patient Registration
   const handleRegisterPatient = async (e) => {
@@ -253,10 +276,10 @@ export default function Dashboard() {
   // DOCTOR WORKFLOW FUNCTIONS
   // ==========================================
   const fetchDoctorWorklist = async () => {
-    if (user.role !== 'DOCTOR') return;
+    if (user?.role !== 'DOCTOR') return;
     try {
       // Find matching doctor from doctors dropdown using user ID link
-      const matchedDoc = doctorsList.find(d => d.userId === user.id);
+      const matchedDoc = Array.isArray(doctorsList) ? doctorsList.find(d => d.userId === user.id) : null;
       if (!matchedDoc) return;
 
       // 1. Fetch appointments for this doctor (N+1 database queries triggers inside server)
@@ -273,7 +296,11 @@ export default function Dashboard() {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       const queueData = await queueRes.json();
-      setDoctorQueue(queueData);
+      if (Array.isArray(queueData)) {
+        setDoctorQueue(queueData);
+      } else {
+        console.error('Failed to fetch doctor queue:', queueData);
+      }
 
     } catch (e) {
       console.error(e);
@@ -281,10 +308,10 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
-    if (user.role === 'DOCTOR' && doctorsList.length > 0) {
+    if (user?.role === 'DOCTOR' && Array.isArray(doctorsList) && doctorsList.length > 0) {
       fetchDoctorWorklist();
     }
-  }, [doctorsList]);
+  }, [doctorsList, user]);
 
   // Update token status (WAITING -> CALLING -> COMPLETED / SKIPPED)
   const handleUpdateQueueStatus = async (tokenId, newStatus) => {
@@ -363,6 +390,10 @@ export default function Dashboard() {
       console.error(e);
     }
   };
+
+  // Keep UI from rendering until auth is initialized. Placed after all Hooks to
+  // avoid changing the Hooks call order between renders (fixes Rules of Hooks error).
+  if (user === null) return null;
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -490,7 +521,7 @@ export default function Dashboard() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                          {patients.map((p) => (
+                          {Array.isArray(patients) && patients.map((p) => (
                             <tr key={p.id} className="hover:bg-slate-500/5 transition-colors">
                               <td className="py-3.5 font-bold text-slate-800 dark:text-slate-200">
                                 {p.name}
@@ -502,7 +533,7 @@ export default function Dashboard() {
                               </td>
                               <td className="py-3.5 text-right space-x-2">
                                 <button
-                                  onClick={() => handleQueueCheckin(p.id, doctorsList[0]?.id)}
+                                  onClick={() => handleQueueCheckin(p.id, Array.isArray(doctorsList) ? doctorsList[0]?.id : undefined)}
                                   className="text-xxs px-2.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-bold hover:bg-teal-500 hover:text-white transition-colors"
                                 >
                                   Check In
@@ -675,7 +706,7 @@ export default function Dashboard() {
                     className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                   >
                     <option value="">-- Choose Patient --</option>
-                    {patients.map(p => (
+                    {Array.isArray(patients) && patients.map(p => (
                       <option key={p.id} value={p.id}>{p.name} ({p.phoneNumber})</option>
                     ))}
                   </select>
@@ -691,7 +722,7 @@ export default function Dashboard() {
                     className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                   >
                     <option value="">-- Choose Physician --</option>
-                    {doctorsList.map(d => (
+                    {Array.isArray(doctorsList) && doctorsList.map(d => (
                       <option key={d.id} value={d.id}>{d.name} - {d.specialization} (${d.consultationFee})</option>
                     ))}
                   </select>
@@ -752,7 +783,7 @@ export default function Dashboard() {
                       className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                     >
                       <option value="">-- Choose Patient --</option>
-                      {patients.map(p => (
+                      {Array.isArray(patients) && patients.map(p => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
@@ -765,7 +796,7 @@ export default function Dashboard() {
                       className="block w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white/50 dark:bg-slate-900/50 rounded-lg text-slate-900 dark:text-slate-100 text-sm focus:outline-none"
                     >
                       <option value="">-- Choose Physician --</option>
-                      {doctorsList.map(d => (
+                      {Array.isArray(doctorsList) && doctorsList.map(d => (
                         <option key={d.id} value={d.id}>{d.name} ({d.specialization})</option>
                       ))}
                     </select>
@@ -817,7 +848,7 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {doctorAppointments.map((app) => (
+                      {Array.isArray(doctorAppointments) && doctorAppointments.map((app) => (
                         <tr key={app.id} className="hover:bg-slate-500/5 transition-colors">
                           <td className="py-3.5 font-mono font-bold text-slate-800 dark:text-slate-200">
                             {new Date(app.appointmentDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -842,8 +873,12 @@ export default function Dashboard() {
                               <>
                                 <button
                                   onClick={() => {
-                                    const matchedDoc = doctorsList.find(d => d.userId === user.id);
-                                    handleQueueCheckin(app.patientId, matchedDoc.id, app.id);
+                                    const matchedDoc = Array.isArray(doctorsList) ? doctorsList.find(d => d.userId === user.id) : null;
+                                    if (matchedDoc) {
+                                      handleQueueCheckin(app.patientId, matchedDoc.id, app.id);
+                                    } else {
+                                      alert('Error: Could not associate current user with a doctor record.');
+                                    }
                                   }}
                                   className="text-xxs px-2.5 py-1 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 font-extrabold hover:bg-teal-500 hover:text-white transition-colors"
                                 >
@@ -894,7 +929,7 @@ export default function Dashboard() {
                       without optional chaining! If medicalHistory is null (which is the case for Batman, Clark Kent, etc.),
                       this code throws: "Cannot read properties of null (reading 'toUpperCase')" and crashes the app! */}
                   <p className="text-slate-700 dark:text-slate-300 leading-5 text-sm font-semibold">
-                    {selectedPatientHistory.medicalHistory.toUpperCase()}
+                    {selectedPatientHistory.medicalHistory ? selectedPatientHistory.medicalHistory.toUpperCase() : 'NO RECORDED MEDICAL HISTORY'}
                   </p>
                 </div>
 
@@ -926,11 +961,11 @@ export default function Dashboard() {
               Manage patient call sequences for live monitors. Update status from waiting to active calling.
             </p>
 
-            {doctorQueue.length === 0 ? (
+            {!Array.isArray(doctorQueue) || doctorQueue.length === 0 ? (
               <p className="text-center py-6 text-slate-400 text-sm">No checked-in patients in queue today.</p>
             ) : (
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {doctorQueue.map((t) => (
+                {Array.isArray(doctorQueue) && doctorQueue.map((t) => (
                   <div
                     key={t.id}
                     className={`p-5 rounded-2xl border shadow-md relative overflow-hidden flex flex-col justify-between ${t.status === 'CALLING' ? 'border-teal-500 bg-teal-500/10' : 'border-slate-200 dark:border-slate-800 bg-slate-500/5'}`}
@@ -1137,7 +1172,7 @@ export default function Dashboard() {
 
             {/* Doctors Result List */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {doctorsList.map((doc) => (
+              {Array.isArray(doctorsList) && doctorsList.map((doc) => (
                 <div
                   key={doc.id}
                   className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-500/5 flex flex-col justify-between"
